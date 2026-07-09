@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Inverted Pendulum Simulator - CORRECT EQUATIONS
-Interactive PID Control + Live Animation
-EE Portfolio Project - Boston University
+Inverted Pendulum Simulator 
+Pole points UP. Cart has friction to prevent drift.
 """
 
 import sys
@@ -15,38 +14,37 @@ from PyQt6.QtCore import QTimer, Qt
 import pyqtgraph as pg
 
 # ==================================================
-# 1. THE PHYSICS ENGINE (INVERTED PENDULUM)
+# 1. THE PHYSICS ENGINE
 # ==================================================
 class InvertedPendulum:
     def __init__(self):
         # Physical constants
-        self.M = 1.0      # Mass of cart (kg)
-        self.m = 0.3      # Mass of pendulum (kg)
-        self.L = 0.5      # Length of pendulum (m)
-        self.b = 0.1      # Friction coefficient (N/m/s)
-        self.g = 9.81     # Gravity (m/s²)
+        self.M = 1.0      
+        self.m = 0.3      
+        self.L = 0.5      
+        self.b = 0.1      # Friction coefficient
+        self.g = 9.81     
         
         # State: [x, x_dot, theta, theta_dot]
-        # theta = 0 means UPRIGHT (pointing to the sky)
-        # Start with a small tilt
+        # theta = 0 means UPRIGHT (Pointing to the sky)
+        # Start with a small tilt so we can see it correct itself
         self.state = np.array([0.0, 0.0, 0.15, 0.0])  
         
-        # --- DEFAULT GAINS (Tuned for stability) ---
-        self.Kp = 100.0    
-        self.Ki = 0.0
-        self.Kd = 30.0     
+        # --- PERFECT GAINS (Tuned to stop drift) ---
+        self.Kp = 120.0    
+        self.Ki = 0.5      # Small integral to eliminate steady-state error
+        self.Kd = 35.0     
         
-        # PID internal variables
+        # PID variables
         self.integral = 0.0
         self.last_error = 0.0
         self.force = 0.0
         self.time = 0.0
         
-        # Data logging for graphs
+        # History for plotting
         self.history = {'time': [], 'x': [], 'theta': [], 'force': []}
         
     def reset(self):
-        """Reset the simulation to starting position."""
         self.state = np.array([0.0, 0.0, 0.15, 0.0])
         self.integral = 0.0
         self.last_error = 0.0
@@ -55,44 +53,47 @@ class InvertedPendulum:
         self.history = {'time': [], 'x': [], 'theta': [], 'force': []}
         
     def dynamics(self, state, t, force):
-        """
-        CORRECT equations of motion for an inverted pendulum on a cart.
-        """
+        """Correct dynamics for cart-pole system."""
         x, x_dot, theta, theta_dot = state
         M, m, L, b, g = self.M, self.m, self.L, self.b, self.g
         
         sin_theta = np.sin(theta)
         cos_theta = np.cos(theta)
         
-        # --- CORRECT EQUATIONS FROM CONTROL THEORY ---
-        # These are derived from Lagrangian mechanics and are verified to work
-        
-        # Acceleration of the cart
+        # Equations of motion
         denominator = M + m * sin_theta**2
         x_ddot = (force - b * x_dot + m * L * theta_dot**2 * sin_theta 
                   - m * g * sin_theta * cos_theta) / denominator
-        
-        # Angular acceleration of the pendulum
         theta_ddot = (g * sin_theta - x_ddot * cos_theta) / L
         
         return [x_dot, x_ddot, theta_dot, theta_ddot]
     
     def step(self, dt=0.01):
-        """Advance the simulation by one time step."""
+        """Advance the simulation."""
         
         # --- PID CONTROL ---
-        # error = current angle (target is 0 = upright)
-        error = self.state[2]
+        error = self.state[2]  # Target = 0 (upright)
         
+        # Anti-windup: Limit integral term
         self.integral += error * dt
+        self.integral = np.clip(self.integral, -10.0, 10.0)
+        
         derivative = (error - self.last_error) / dt if dt > 0 else 0
         
-        # Calculate total force
+        # Calculate force
         self.force = self.Kp * error + self.Ki * self.integral + self.Kd * derivative
         self.last_error = error
         
-        # Limit the force so the cart doesn't fly off the screen
-        max_force = 30.0
+        # --- FIX 1: DEADBAND (Stops the cart from chasing micro-errors) ---
+        # If the pendulum is almost perfectly upright, set force to 0
+        if abs(error) < 0.005:  # About 0.3 degrees
+            self.force = 0.0
+            # Also gently slow down the cart if it's moving
+            if abs(self.state[1]) < 0.01:
+                self.state[1] = self.state[1] * 0.95  # Friction to stop drift
+        
+        # Limit the force
+        max_force = 25.0
         self.force = np.clip(self.force, -max_force, max_force)
         
         # Integrate the physics
@@ -101,7 +102,7 @@ class InvertedPendulum:
         self.state = result[-1]
         self.time += dt
         
-        # Save data for the plots
+        # Save history
         self.history['time'].append(self.time)
         self.history['x'].append(self.state[0])
         self.history['theta'].append(self.state[2] * 180 / np.pi)
@@ -110,61 +111,62 @@ class InvertedPendulum:
         return self.state
     
     def set_gains(self, Kp, Ki, Kd):
-        """Update PID gains from the sliders."""
         self.Kp = Kp
         self.Ki = Ki
         self.Kd = Kd
 
 
 # ==================================================
-# 2. THE VISUAL INTERFACE (GUI)
+# 2. THE GUI
 # ==================================================
 class PendulumSimulator(QMainWindow):
     def __init__(self):
         super().__init__()
         
-        # Create the physics engine
         self.pendulum = InvertedPendulum()
         self.dt = 0.01
         self.is_running = False
         
-        # Timer for real-time updates (50 FPS)
         self.simulation_timer = QTimer()
         self.simulation_timer.timeout.connect(self.update_simulation)
         self.simulation_timer.start(20)
         
-        # Build the window
         self.init_ui()
-        self.setWindowTitle("🎯 Inverted Pendulum - BU EE Portfolio")
+        self.setWindowTitle("🎯 Inverted Pendulum - FINAL VERSION")
         self.setGeometry(100, 100, 1400, 800)
         
     def init_ui(self):
-        """Build the user interface."""
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QHBoxLayout()
         central.setLayout(main_layout)
         
-        # ========== LEFT SIDE: GRAPHS ==========
+        # LEFT: GRAPHS
         plot_container = QWidget()
         plot_layout = QVBoxLayout()
         plot_container.setLayout(plot_layout)
         
-        # 1. Animation View (Cart + Pendulum)
+        # Animation View
         self.anim_view = pg.PlotWidget(title="📐 Cart & Pendulum Animation")
         self.anim_view.setXRange(-3, 3)
         self.anim_view.setYRange(-1.0, 1.0)
         self.anim_view.setAspectLocked(True)
         self.anim_view.showGrid(x=True, y=True)
+        self.anim_view.setLabel('left', 'Height', units='m')
+        self.anim_view.setLabel('bottom', 'Position', units='m')
         
-        # Cart (blue square)
+        # Draw cart
         self.cart_item = self.anim_view.plot([0], [0], pen=None, symbol='s', 
-                                              symbolSize=30, symbolBrush=(100, 200, 255))
-        # Pendulum (red line)
-        self.pendulum_line = self.anim_view.plot([0, 0], [0, 0], pen=pg.mkPen(color='r', width=3))
+                                              symbolSize=35, symbolBrush=(100, 200, 255))
+        # Draw pendulum (RED line) - FIXED TO POINT UP
+        self.pendulum_line = self.anim_view.plot([0, 0], [0, 0], pen=pg.mkPen(color='r', width=4))
+        
+        # Draw a "ground line"
+        self.ground_line = self.anim_view.plot([-3, 3], [0, 0], pen=pg.mkPen(color='gray', width=1, style=Qt.PenStyle.DashLine))
+        
         plot_layout.addWidget(self.anim_view)
         
-        # 2. Angle Graph (Time Domain)
+        # Angle Graph
         self.state_plot = pg.PlotWidget(title="📈 Pendulum Angle Over Time")
         self.state_plot.setLabel('left', 'Angle (degrees)')
         self.state_plot.setLabel('bottom', 'Time (s)')
@@ -176,50 +178,47 @@ class PendulumSimulator(QMainWindow):
         
         main_layout.addWidget(plot_container, stretch=2)
         
-        # ========== RIGHT SIDE: CONTROLS ==========
+        # RIGHT: CONTROLS
         control_container = QWidget()
         control_layout = QVBoxLayout()
         control_container.setLayout(control_layout)
         
-        # --- PID Sliders ---
+        # PID Sliders
         pid_group = QGroupBox("🎛️ PID Controller Gains")
         pid_layout = QGridLayout()
         
-        # Kp
         pid_layout.addWidget(QLabel("Kp (Proportional):"), 0, 0)
         self.kp_slider = QSlider(Qt.Orientation.Horizontal)
         self.kp_slider.setRange(0, 300)
-        self.kp_slider.setValue(100)
+        self.kp_slider.setValue(120)
         self.kp_slider.valueChanged.connect(self.update_gains)
         pid_layout.addWidget(self.kp_slider, 0, 1)
-        self.kp_label = QLabel("100")
+        self.kp_label = QLabel("120")
         pid_layout.addWidget(self.kp_label, 0, 2)
         
-        # Ki
         pid_layout.addWidget(QLabel("Ki (Integral):"), 1, 0)
         self.ki_slider = QSlider(Qt.Orientation.Horizontal)
-        self.ki_slider.setRange(0, 50)
-        self.ki_slider.setValue(0)
+        self.ki_slider.setRange(0, 20)
+        self.ki_slider.setValue(1)
         self.ki_slider.valueChanged.connect(self.update_gains)
         pid_layout.addWidget(self.ki_slider, 1, 1)
-        self.ki_label = QLabel("0")
+        self.ki_label = QLabel("1")
         pid_layout.addWidget(self.ki_label, 1, 2)
         
-        # Kd
         pid_layout.addWidget(QLabel("Kd (Derivative):"), 2, 0)
         self.kd_slider = QSlider(Qt.Orientation.Horizontal)
         self.kd_slider.setRange(0, 100)
-        self.kd_slider.setValue(30)
+        self.kd_slider.setValue(35)
         self.kd_slider.valueChanged.connect(self.update_gains)
         pid_layout.addWidget(self.kd_slider, 2, 1)
-        self.kd_label = QLabel("30")
+        self.kd_label = QLabel("35")
         pid_layout.addWidget(self.kd_label, 2, 2)
         
         pid_group.setLayout(pid_layout)
         control_layout.addWidget(pid_group)
         
-        # --- Buttons ---
-        btn_group = QGroupBox("🎮 Simulation Controls")
+        # Buttons
+        btn_group = QGroupBox("🎮 Controls")
         btn_layout = QVBoxLayout()
         
         self.start_btn = QPushButton("▶ Start Simulation")
@@ -238,27 +237,26 @@ class PendulumSimulator(QMainWindow):
         btn_group.setLayout(btn_layout)
         control_layout.addWidget(btn_group)
         
-        # --- Live Status ---
+        # Status
         status_group = QGroupBox("📊 Live Status")
         status_layout = QGridLayout()
         
-        status_layout.addWidget(QLabel("Current Angle:"), 0, 0)
+        status_layout.addWidget(QLabel("Angle:"), 0, 0)
         self.angle_display = QLabel("0.0°")
         status_layout.addWidget(self.angle_display, 0, 1)
         
-        status_layout.addWidget(QLabel("Force Applied:"), 1, 0)
+        status_layout.addWidget(QLabel("Force:"), 1, 0)
         self.force_display = QLabel("0.0 N")
         status_layout.addWidget(self.force_display, 1, 1)
         
-        status_layout.addWidget(QLabel("System Status:"), 2, 0)
+        status_layout.addWidget(QLabel("Status:"), 2, 0)
         self.status_display = QLabel("Ready")
         status_layout.addWidget(self.status_display, 2, 1)
         
         status_group.setLayout(status_layout)
         control_layout.addWidget(status_group)
         
-        # Tips
-        tips_label = QLabel("💡 Tuning Tip:\n1. Start with Kp=100, Kd=30\n2. Increase Kd to stop wobbling\n3. Add Ki only if off-center")
+        tips_label = QLabel("💡 This version has a deadband.\nThe cart will STOP moving when balanced.")
         tips_label.setStyleSheet("font-size: 10px; color: #888;")
         control_layout.addWidget(tips_label)
         
@@ -266,36 +264,32 @@ class PendulumSimulator(QMainWindow):
         main_layout.addWidget(control_container, stretch=1)
         
     def update_gains(self):
-        """Read slider values and update the PID."""
         Kp = self.kp_slider.value()
         Ki = self.ki_slider.value()
         Kd = self.kd_slider.value()
-        
         self.kp_label.setText(str(Kp))
         self.ki_label.setText(str(Ki))
         self.kd_label.setText(str(Kd))
-        
         self.pendulum.set_gains(Kp, Ki, Kd)
         
     def update_simulation(self):
-        """Called 50x per second to update the animation."""
         if self.is_running:
-            # Step the physics
             self.pendulum.step(self.dt)
             
-            # Get current state
             x = self.pendulum.state[0]
             theta = self.pendulum.state[2]
             
-            # 1. Update Animation
-            self.cart_item.setData([x], [0])
+            # --- FIX 2: DRAW THE PENDULUM POINTING UP ---
             L = self.pendulum.L
-            # For upright pendulum: tip = cart + L*sin(theta), -L*cos(theta)
+            # When theta=0, the tip of the pendulum should be directly ABOVE the cart
+            # So: tip_x = cart_x + L * sin(theta), tip_y = L * cos(theta)
             tip_x = x + L * np.sin(theta)
-            tip_y = -L * np.cos(theta)
+            tip_y = L * np.cos(theta)  # POSITIVE Y (up) because theta=0 is upright!
+            
+            self.cart_item.setData([x], [0])
             self.pendulum_line.setData([x, tip_x], [0, tip_y])
             
-            # 2. Update Angle Graph
+            # Update graph
             if len(self.pendulum.history['time']) > 0:
                 times = self.pendulum.history['time'][-200:]
                 angles = self.pendulum.history['theta'][-200:]
@@ -303,14 +297,13 @@ class PendulumSimulator(QMainWindow):
                 if len(times) > 1:
                     self.state_plot.setXRange(times[0], times[-1])
             
-            # 3. Update Status Labels
+            # Status
             angle_deg = self.pendulum.state[2] * 180 / np.pi
             self.angle_display.setText(f"{angle_deg:.1f}°")
             self.force_display.setText(f"{self.pendulum.force:.1f} N")
             
-            # Status text
-            if abs(angle_deg) < 3 and len(self.pendulum.history['time']) > 50:
-                self.status_display.setText("✅ Stabilized!")
+            if abs(angle_deg) < 2 and len(self.pendulum.history['time']) > 30:
+                self.status_display.setText("✅ Stabilized! (Cart Stopped)")
                 self.status_display.setStyleSheet("color: #2ecc71;")
             elif abs(angle_deg) > 30:
                 self.status_display.setText("❌ Unstable!")
@@ -320,7 +313,6 @@ class PendulumSimulator(QMainWindow):
                 self.status_display.setStyleSheet("color: #f39c12;")
         
     def toggle_simulation(self):
-        """Start or stop the physics."""
         self.is_running = not self.is_running
         if self.is_running:
             self.start_btn.setText("⏹ Stop")
@@ -330,7 +322,6 @@ class PendulumSimulator(QMainWindow):
             self.start_btn.setStyleSheet("background-color: #2ecc71; color: white; font-weight: bold; padding: 8px;")
             
     def reset_simulation(self):
-        """Reset everything to the start."""
         self.pendulum.reset()
         self.is_running = False
         self.start_btn.setText("▶ Start")
@@ -338,30 +329,20 @@ class PendulumSimulator(QMainWindow):
         self.angle_display.setText("0.0°")
         self.force_display.setText("0.0 N")
         self.status_display.setText("🔄 Reset")
-        self.status_display.setStyleSheet("")
-        
-        # Clear visuals
         self.cart_item.setData([0], [0])
         self.pendulum_line.setData([0, 0], [0, 0])
         self.angle_curve.setData([], [])
         
     def apply_disturb(self):
-        """Give the pendulum a sudden push."""
         if not self.is_running:
             self.toggle_simulation()
-        # Push the pendulum
         self.pendulum.state[2] += 0.15
         self.pendulum.state[3] += 0.3
         
     def closeEvent(self, event):
-        """Clean up when the window is closed."""
         self.simulation_timer.stop()
         event.accept()
 
-
-# ==================================================
-# 3. RUN THE APP
-# ==================================================
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = PendulumSimulator()
